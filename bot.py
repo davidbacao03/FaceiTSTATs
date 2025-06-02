@@ -294,5 +294,67 @@ async def faceitsync(interaction: discord.Interaction, minutes: int):
     print(f"[FACEIT SYNC] Interval changed! Next sync will run every {SYNC_INTERVAL_MINUTES} minutes.")
     await interaction.response.send_message(f"FACEIT level sync interval set to {minutes} minutes.", ephemeral=True)
 
+# Slash command: /activematch
+@tree.command(name="activematch", description="Veja se um usuário está em uma partida ativa na FACEIT.")
+@app_commands.describe(discord_user="Usuário do Discord registrado", faceit_username="Username da FACEIT")
+async def activematch(interaction: discord.Interaction, discord_user: discord.Member = None, faceit_username: str = None):
+    """Mostra se o usuário está em uma partida ativa na FACEIT."""
+    links = load_links()
+    username = None
+    # Prioridade: faceit_username > discord_user > erro
+    if faceit_username:
+        username = faceit_username
+    elif discord_user:
+        user_id = str(discord_user.id)
+        username = links.get(user_id)
+        if not username:
+            await interaction.response.send_message(f"{discord_user.mention} não tem uma conta FACEIT vinculada.", ephemeral=True)
+            return
+    else:
+        await interaction.response.send_message("Você precisa informar um usuário do Discord ou um username da FACEIT.", ephemeral=True)
+        return
+    headers = {"Authorization": f"Bearer {FACEIT_API_KEY}"}
+    # Buscar player_id
+    user_url = f"https://open.faceit.com/data/v4/players?nickname={username}"
+    user_resp = requests.get(user_url, headers=headers)
+    if user_resp.status_code != 200:
+        await interaction.response.send_message(f"Não foi possível encontrar o usuário FACEIT: {username}", ephemeral=True)
+        return
+    user_data = user_resp.json()
+    player_id = user_data.get('player_id')
+    if not player_id:
+        await interaction.response.send_message(f"Não foi possível obter o player_id do usuário: {username}", ephemeral=True)
+        return
+    # Buscar partidas recentes
+    matches_url = f"https://open.faceit.com/data/v4/players/{player_id}/history?game=cs2&limit=1"
+    matches_resp = requests.get(matches_url, headers=headers)
+    if matches_resp.status_code != 200:
+        await interaction.response.send_message(f"Não foi possível buscar as partidas do usuário: {username}", ephemeral=True)
+        return
+    matches_data = matches_resp.json()
+    items = matches_data.get('items', [])
+    if not items:
+        await interaction.response.send_message(f"{username} não tem partidas recentes.", ephemeral=True)
+        return
+    last_match = items[0]
+    match_id = last_match.get('match_id')
+    if not match_id:
+        await interaction.response.send_message(f"Não foi possível obter o match_id da última partida.", ephemeral=True)
+        return
+    # Buscar detalhes do match para status real
+    match_detail_url = f"https://open.faceit.com/data/v4/matches/{match_id}"
+    match_detail_resp = requests.get(match_detail_url, headers=headers)
+    if match_detail_resp.status_code != 200:
+        await interaction.response.send_message(f"Não foi possível buscar detalhes da última partida.", ephemeral=True)
+        return
+    match_detail = match_detail_resp.json()
+    match_status = match_detail.get('status')
+    # Verifica se a partida está ativa (status 'ONGOING')
+    if match_status and match_status.upper() == 'ONGOING':
+        match_url = f"https://www.faceit.com/pt/cs2/room/{match_id}"
+        await interaction.response.send_message(f"{username} está em uma partida ativa!\nLink: {match_url}", ephemeral=False)
+    else:
+        await interaction.response.send_message(f"{username} não está em uma partida ativa no momento.", ephemeral=True)
+
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
